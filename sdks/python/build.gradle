@@ -232,7 +232,7 @@ def matchesImpactTask(name) {
         options += ["--job_endpoint=${project.property('jobEndpoint')}"]
       exec {
         executable 'sh'
-        args '-c', ". ${project.ext.envdir}/bin/activate && python -m apache_beam.examples.main_impact ${options.join(' ')}"
+        args '-c', ". ${project.ext.envdir}/bin/activate && python -m apache_beam.moremmr.main_impact ${options.join(' ')}"
         // TODO: Check that the output file is generated and runs.
       }
     }
@@ -258,7 +258,7 @@ def itemsMeanPurchaseTimeTask(name) {
         options += ["--job_endpoint=${project.property('jobEndpoint')}"]
       exec {
         executable 'sh'
-        args '-c', ". ${project.ext.envdir}/bin/activate && python -m apache_beam.examples.items_mean_purchase_time ${options.join(' ')}"
+        args '-c', ". ${project.ext.envdir}/bin/activate && python -m apache_beam.moremmr.items_mean_purchase_time ${options.join(' ')}"
         // TODO: Check that the output file is generated and runs.
       }
     }

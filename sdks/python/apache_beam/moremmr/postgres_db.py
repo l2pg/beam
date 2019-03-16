@@ -1,3 +1,4 @@
+import os
 import psycopg2
 import psycopg2.extras
 
@@ -5,11 +6,11 @@ class PostgresDb(object):
     def __init__(self):
         self.postgres_db = None
 
-        self.DSN = 'dbname={0} user={1} password={2} host={3} port={4}'.format('moremmr_dwh',
-                                                                               'readonly',
-                                                                               'Mmr8B8r3',
-                                                                               '13.77.171.55',
-                                                                               '5432')
+        self.DSN = 'dbname={0} user={1} password={2} host={3} port={4}'.format(os.environ['POSTGRES_DB'],
+                                                                               os.environ['POSTGRES_USER'],
+                                                                               os.environ['POSTGRES_PWD'],
+                                                                               os.environ['POSTGRES_HOST'],
+                                                                               os.environ['POSTGRES_PORT'])
 
     def __del__(self):
         self.close_connection()

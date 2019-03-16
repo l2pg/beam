@@ -207,6 +207,64 @@ task directRunnerIT(dependsOn: 'installGcpTest') {
 //
 //    ./gradlew :beam-sdks-python:portableWordCount -PjobEndpoint=localhost:8099
 //
+task matchesImpact {
+  dependsOn matchesImpactTask('MatchesImpactCalculation')
+}
+
+task itemsMeanPurchaseTime {
+  dependsOn itemsMeanPurchaseTimeTask('itemsMeanPurchaseTimeCalculation')
+}
+
+def matchesImpactTask(name) {
+  tasks.create(name) {
+    dependsOn = ['installGcpTest']
+    mustRunAfter = [':beam-runners-flink_2.11-job-server-container:docker', ':beam-sdks-python-container:docker']
+    doLast {
+      // TODO: Figure out GCS credentials and use real GCS input and output.
+      def options = [
+              "--runner=PortableRunner",
+              "--parallelism=10",
+      ]
+      // workaround for local file output in docker container
+      options += ["--environment_cache_millis=10000"]
+
+      if (project.hasProperty("jobEndpoint"))
+        options += ["--job_endpoint=${project.property('jobEndpoint')}"]
+      exec {
+        executable 'sh'
+        args '-c', ". ${project.ext.envdir}/bin/activate && python -m apache_beam.examples.main_impact ${options.join(' ')}"
+        // TODO: Check that the output file is generated and runs.
+      }
+    }
+  }
+}
+
+def itemsMeanPurchaseTimeTask(name) {
+  tasks.create(name) {
+    dependsOn = ['installGcpTest']
+    mustRunAfter = [':beam-runners-flink_2.11-job-server-container:docker', ':beam-sdks-python-container:docker']
+    doLast {
+      // TODO: Figure out GCS credentials and use real GCS input and output.
+      def options = [
+              "--input=/tmp",
+              "--output=/tmp",
+              "--runner=PortableRunner",
+              "--parallelism=15",
+      ]
+      // workaround for local file output in docker container
+      options += ["--environment_cache_millis=10000"]
+
+      if (project.hasProperty("jobEndpoint"))
+        options += ["--job_endpoint=${project.property('jobEndpoint')}"]
+      exec {
+        executable 'sh'
+        args '-c', ". ${project.ext.envdir}/bin/activate && python -m apache_beam.examples.items_mean_purchase_time ${options.join(' ')}"
+        // TODO: Check that the output file is generated and runs.
+      }
+    }
+  }
+}
+
 task portableWordCount {
   dependsOn portableWordCountTask('portableWordCountExample', project.hasProperty("streaming"))
 }

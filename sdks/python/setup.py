@@ -125,6 +125,10 @@ REQUIRED_PACKAGES = [
     'pyvcf>=0.6.8,<0.7.0; python_version < "3.0"',
     'pyyaml>=3.12,<4.0.0',
     'typing>=3.6.0,<3.7.0; python_version < "3.5.0"',
+    'redis==3.0.1',
+    'azure-storage-blob==1.3.0',
+    'psycopg2==2.7.4',
+    'scikit-learn==0.20.2',
     ]
 
 REQUIRED_TEST_PACKAGES = [

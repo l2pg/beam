@@ -1,6 +1,7 @@
-import os
 import psycopg2
 import psycopg2.extras
+import __builtin__
+
 
 class PostgresDb(object):
     def __init__(self):
@@ -106,7 +107,10 @@ class PostgresDb(object):
                     del_keys_exist = len(del_keys) > 0
 
                     if part_keys_exist or del_keys_exist:
-                        exec_values = (part_keys, del_keys) if part_keys_exist and del_keys_exist else (tuple([del_keys]) if del_keys_exist else tuple([part_keys]))
+                        exec_values = (part_keys, del_keys) \
+                            if part_keys_exist and del_keys_exist \
+                            else (tuple([del_keys]) if del_keys_exist
+                                  else tuple([part_keys]))
                         cursor.execute(del_stm, exec_values)
 
                     # insert
@@ -115,9 +119,142 @@ class PostgresDb(object):
                     res = True
 
                 except Exception as ex:
-                    print('Delete_insert_by_df failed with exception {0}'.format(ex))
+                    print('Update_by_delete_insert_with_df failed with exception {0}'.format(ex))
 
                 cursor.close()
                 self.close_connection()
 
         return res
+
+    def update_tgt_by_tmp(self, tmp_table='', tgt_table='', columns=[]):
+        res = False
+
+        if tmp_table and tgt_table and columns:
+            sql_str = 'insert into {0}({1})' \
+                      'select {1} ' \
+                      'from {2} ' \
+                      'returning 1'.format(tgt_table,
+                                           ','.join(columns),
+                                           tmp_table)
+
+            if self.connect_to_postgres_db():
+                cursor = self.postgres_db.cursor()
+
+                try:
+                    cursor.execute(sql_str)
+
+                    if cursor.rowcount > 0:
+                        self.postgres_db.commit()
+                        res = True
+                except Exception as ex:
+                    print('Update_tgt_by_tmp failed with exception {0}'.format(ex))
+
+                cursor.close()
+                self.close_connection()
+
+        return res
+
+    def truncate_table_by_delete(self, table_name):
+        res = False
+
+        if table_name:
+            del_stm = 'delete from {0}'.format(table_name)
+
+            if self.connect_to_postgres_db():
+                cursor = self.postgres_db.cursor()
+
+                try:
+                    cursor.execute(del_stm)
+                    self.postgres_db.commit()
+                    res = True
+                except Exception as ex:
+                    print('Truncate_table_by_delete failed with exception {0}'.format(ex))
+
+                cursor.close()
+                self.close_connection()
+
+        return res
+
+    def insert_into_table_with_df(self, table_name, df, close_connection=True):
+        res = False
+
+        df_columns = list(df)
+        ins_columns = ",".join(df_columns)
+        ins_values = "values({})".format(",".join(["%s" for _ in df_columns]))
+        ins_stm = "insert into {0}({1}) {2} returning 1".format(table_name, ins_columns, ins_values)
+
+        if self.connect_to_postgres_db():
+            cursor = self.postgres_db.cursor()
+            try:
+                psycopg2.extras.execute_batch(cursor, ins_stm, df.values)
+                if cursor.rowcount > 0:
+                    self.postgres_db.commit()
+                    res = True
+
+            except Exception as ex:
+                print('Insert_into_table_with_df failed with exception {0}'.format(ex))
+
+            cursor.close()
+
+            if close_connection:
+                self.close_connection()
+
+        return res
+
+    def get_kv_settings(self, table_name):
+        select_stm = 'select key, value, type from {0}'.format(table_name)
+
+        settings = {}
+
+        if self.connect_to_postgres_db():
+            cursor = self.postgres_db.cursor()
+            try:
+                cursor.execute(select_stm)
+
+                if cursor.rowcount > 0:
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        key = row[0]
+                        val = row[1]
+                        value_type = row[2]
+
+                        try:
+                            if value_type == 'bool':
+                                value = True if str(val).lower() in ('1','true') else False
+                            else:
+                                value = getattr(__builtin__, value_type)(val)
+                        except (TypeError, ValueError):
+                            value = str(val)
+
+                        settings[key] = value
+            except Exception as ex:
+                print('Get_kv_settings failed with exception {0}'.format(ex))
+
+            cursor.close()
+            self.close_connection()
+
+        return settings
+
+    def run_sql_commit_if_returns(self, sql_stm='', close_connection=True):
+        res = False
+        rows = []
+
+        if sql_stm:
+            if self.connect_to_postgres_db():
+                cursor = self.postgres_db.cursor()
+                try:
+                    cursor.execute(sql_stm)
+                    if cursor.rowcount > 0:
+                        self.postgres_db.commit()
+                        rows = cursor.fetchall()
+                        res = True
+                except Exception as ex:
+                    print('Run_sql_commit_if_returns failed with exception {0}'.format(ex))
+
+                cursor.close()
+
+                if close_connection:
+                    self.close_connection()
+
+        return res, rows
+

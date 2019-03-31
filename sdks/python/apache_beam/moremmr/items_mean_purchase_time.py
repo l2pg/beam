@@ -1,12 +1,11 @@
 import argparse
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import apache_beam as beam
 from apache_beam.options.pipeline_options import PipelineOptions
 from apache_beam.transforms import GroupByKey
 
 from base_classes import DoFnBase
-from file_storage import FileStorage
 from postgres_db import PostgresDb
 
 
@@ -32,6 +31,7 @@ def collection_range_timestamps(startDate, endDate,
     return times if return_as_list else beam.Create(times)
 
 
+'''
 def collection_dumped_files(file_storage):
     blob_names = []
 
@@ -46,6 +46,7 @@ def collection_dumped_files(file_storage):
                 break
 
     return beam.Create(blob_names)
+'''
 
 
 def collection_heroes():
@@ -77,7 +78,7 @@ class DoFnQueryPurchLog(DoFnBase):
         start = None if boundaries_tuple_len != 2 else boundaries_tuple[0]
         end = None if boundaries_tuple_len != 2 else boundaries_tuple[1]
 
-        if start is not None and end is not None:
+        if start and end:
             queries.append({'start_date': start,
                             'end_date': end,
                             'sql': 'select match_id, '
@@ -179,7 +180,9 @@ class DoFnRetrieveHeroesItemsPurchTime(DoFnBase):
                     (_, __, time_tick, item) = row_purch_log
 
                     key = '{0}_{1}'.format(hero_id, lane)
-                    value = tuple([item,
+                    value = tuple([hero_id,
+                                   lane,
+                                   item,
                                    time_tick,
                                    match_id,
                                    win,
@@ -203,9 +206,21 @@ class DoFnDumpStatSource(DoFnBase):
 
         (key, hero_data) = hero_tuple
 
-        blob_name = 'stat_source_{0}.csv'.format(key)
-        df = pd.DataFrame(hero_data)
-        self.append_df_to_blob(blob_name=blob_name, df=df)
+        df = pd.DataFrame(hero_data, columns=['hero_id',
+                                              'lane',
+                                              'item',
+                                              'time_tick',
+                                              'match_id',
+                                              'win',
+                                              'enemy1_id',
+                                              'enemy2_id',
+                                              'enemy3_id',
+                                              'enemy4_id',
+                                              'enemy5_id'])
+
+        self.pg_db.insert_into_table_with_df(table_name='stage.tmp_items_mean_purchase_time',
+                                             df=df,
+                                             close_connection=True)
 
         return [1]
 
@@ -222,11 +237,22 @@ class DoFnCalculatePurchStatistics(DoFnBase):
         items_enemy_win = {}
         items_win = {}
 
-        for lane in range(5):
-            blob_hero_name = 'stat_source_{0}_{1}.csv'.format(hero_id, lane)
+        for lane in range(1,6):
+            select_stm = 'select item, ' \
+                         'time_tick, ' \
+                         'match_id, ' \
+                         'win, ' \
+                         'enemy1_id, ' \
+                         'enemy2_id, ' \
+                         'enemy3_id, ' \
+                         'enemy4_id, ' \
+                         'enemy5_id ' \
+                         'from stage.tmp_items_mean_purchase_time ' \
+                         'where hero_id={0} and lane={1}'.format(hero_id, lane)
 
-            df = self.get_blob_as_df(blob_name=blob_hero_name,
-                                     names=['item',
+            rows = self.pg_db.select_pure(select_stm)
+
+            df = pd.DataFrame(rows, columns=['item',
                                             'time_tick',
                                             'match_id',
                                             'win',
@@ -289,9 +315,6 @@ class DoFnCalculatePurchStatistics(DoFnBase):
 
                 df_array = df_array[(df_array[:, df.columns.get_loc('item')] != item)]
 
-            # self.delete_blob(blob_hero_name)
-
-
         if items_mean_purch_time:
             mean_df = pd.DataFrame(items_mean_purch_time,
                                    columns=['hero_id',
@@ -305,7 +328,6 @@ class DoFnCalculatePurchStatistics(DoFnBase):
                 df=mean_df,
                 key_column_name='hero_id',
                 key_column_type=int)
-
 
         items_enemies_winrate = []
         if items_enemy_win.keys():
@@ -360,6 +382,7 @@ class DoFnCalculatePurchStatistics(DoFnBase):
         return [1]
 
 
+'''
 class DoFnDropDumpedFiles(DoFnBase):
     def __init__(self, **kwargs):
         super(DoFnDropDumpedFiles, self).__init__(**kwargs)
@@ -369,7 +392,7 @@ class DoFnDropDumpedFiles(DoFnBase):
             self.file_storage.delete_blob(blob_name)
 
         return [1]
-
+'''
 
 def list_chunks(l, n):
     for i in range(0, len(l), n):
@@ -381,8 +404,6 @@ def parse_string_date(string_date):
 
 
 def run(argv=None):
-    from numpy import isnan
-
     # TODO: DROP indexes on purch log in DB
 
     parser = argparse.ArgumentParser()
@@ -407,58 +428,51 @@ def run(argv=None):
 
     known_args, pipeline_args = parser.parse_known_args(argv)
 
-    fs = FileStorage('items-mean-purchase-time')
     pg = PostgresDb()
     pipeline_options = PipelineOptions(pipeline_args)
 
 
     # clean dumped files
-    with beam.Pipeline(options=pipeline_options) as p:
-        (p
-         | 'get_dumped_files' >> collection_dumped_files(file_storage=fs)
-         | 'drop_dumped_files' >> beam.ParDo(DoFnDropDumpedFiles(file_storage=fs))
-        )
+    pg.truncate_table_by_delete(table_name='stage.tmp_items_mean_purchase_time')
 
-
-    time_boundaries = collection_range_timestamps(
+    time_boundaries_list = collection_range_timestamps(
         startDate=known_args.startDate,
         endDate=known_args.endDate,
-        delta=timedelta(hours=1))
+        delta=timedelta(hours=1),
+        return_as_list=True)
 
     #time_boundaries_list = collection_range_timestamps(startDate=datetime(2019, 1, 29, 0, 0, 0),
     #                                                   endDate=datetime(2019, 1, 29, 1, 0, 0),
     #                                                   delta=timedelta(hours=1),
     #                                                   return_as_list=True)
 
-
     # perform source data
-    #for time_boundaries_bulk_list in list_chunks(time_boundaries_list, 15):
-    with beam.Pipeline(options=pipeline_options) as p:
-        t_boundaries_sources = (p
-                                | 'next_time_boundaries_bulk' >> time_boundaries)
+    for time_boundaries_bulk_list in list_chunks(time_boundaries_list, 15):
+        with beam.Pipeline(options=pipeline_options) as p:
+            t_boundaries_sources = (p
+                                    | 'next_time_boundaries_bulk' >> beam.Create(time_boundaries_bulk_list))
 
-        purch_log_data = (t_boundaries_sources
-                          | 'sql_prepare_purchase_log' >> beam.ParDo(DoFnQueryPurchLog())
-                          | 'sql_execute_purchase_log' >> beam.ParDo(DoFnExecuteSql(table_tag='purchase_log', pg_db=pg))
-        )
+            purch_log_data = (t_boundaries_sources
+                              | 'sql_prepare_purchase_log' >> beam.ParDo(DoFnQueryPurchLog())
+                              | 'sql_execute_purchase_log' >> beam.ParDo(DoFnExecuteSql(table_tag='purchase_log', pg_db=pg))
+            )
 
-        matches_players_data = (t_boundaries_sources
-                                | 'sql_prepare_matches_players' >> beam.ParDo(DoFnQueryMatchesPlayers())
-                                | 'sql_execute_matches_players' >> beam.ParDo(DoFnExecuteSql(table_tag='matches_players', pg_db=pg))
-        )
+            matches_players_data = (t_boundaries_sources
+                                    | 'sql_prepare_matches_players' >> beam.ParDo(DoFnQueryMatchesPlayers())
+                                    | 'sql_execute_matches_players' >> beam.ParDo(DoFnExecuteSql(table_tag='matches_players', pg_db=pg))
+            )
 
-        ({'purch_log': purch_log_data, 'matches_players': matches_players_data}
-        | 'group_by_match_id_player_num' >> beam.CoGroupByKey()
-        | 'retrieve_heroes_items_purch_times' >> beam.ParDo(DoFnRetrieveHeroesItemsPurchTime())
-        | 'group_by_heroes' >> GroupByKey()
-        | 'dump_stat_source' >> beam.ParDo(DoFnDumpStatSource(file_storage=fs))
-        )
-
+            ({'purch_log': purch_log_data, 'matches_players': matches_players_data}
+            | 'group_by_match_id_player_num' >> beam.CoGroupByKey()
+            | 'retrieve_heroes_items_purch_times' >> beam.ParDo(DoFnRetrieveHeroesItemsPurchTime())
+            | 'group_by_heroes' >> GroupByKey()
+            | 'dump_stat_source' >> beam.ParDo(DoFnDumpStatSource(pg_db=pg))
+            )
 
     with beam.Pipeline(options=pipeline_options) as p:
         (p
          | 'heroes_collection' >> collection_heroes()
-         | 'calculate_purch_statistics' >> beam.ParDo(DoFnCalculatePurchStatistics(file_storage=fs, pg_db=pg)))
+         | 'calculate_purch_statistics' >> beam.ParDo(DoFnCalculatePurchStatistics(pg_db=pg)))
 
 
 if __name__ == '__main__':
